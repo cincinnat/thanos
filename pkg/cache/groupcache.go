@@ -159,6 +159,7 @@ func NewGroupcacheWithConfig(logger log.Logger, reg prometheus.Registerer, conf 
 			if err != nil {
 				return err
 			}
+			level.Info(logger).Log("DBG", "calling getter", "verb", parsedData.Verb, "name", parsedData.Name)
 
 			switch parsedData.Verb {
 			case cachekey.AttributesVerb:
@@ -184,6 +185,8 @@ func NewGroupcacheWithConfig(logger log.Logger, reg prometheus.Registerer, conf 
 					panic("caching bucket layer must not call on unconfigured paths")
 				}
 
+				level.Info(logger).Log("DBG", "calling bucket.Iter()")
+
 				var list []string
 				if err := bucket.Iter(ctx, parsedData.Name, func(s string) error {
 					list = append(list, s)
@@ -197,6 +200,10 @@ func NewGroupcacheWithConfig(logger log.Logger, reg prometheus.Registerer, conf 
 					return err
 				}
 
+				level.Info(logger).Log("DBG", "updating cache", "len", len(list),
+					"expire", time.Now().Add(iterCfg.TTL),
+					"ttl", iterCfg.TTL,
+				)
 				return dest.UnmarshalBinary(encodedList, time.Now().Add(iterCfg.TTL))
 			case cachekey.IterRecursiveVerb:
 				_, iterCfg := cfg.FindIterConfig(parsedData.Name)
@@ -234,6 +241,10 @@ func NewGroupcacheWithConfig(logger log.Logger, reg prometheus.Registerer, conf 
 					return err
 				}
 
+				level.Info(logger).Log("DBG", "updating cache", "len", len(b),
+					"expire", time.Now().Add(contentCfg.ContentTTL),
+					"ttl", contentCfg.ContentTTL,
+				)
 				return dest.UnmarshalBinary(b, time.Now().Add(contentCfg.ContentTTL))
 			case cachekey.ExistsVerb:
 				_, existsCfg := cfg.FindExistConfig(parsedData.Name)
@@ -242,12 +253,73 @@ func NewGroupcacheWithConfig(logger log.Logger, reg prometheus.Registerer, conf 
 				}
 				exists, err := bucket.Exists(ctx, parsedData.Name)
 				if err != nil {
+					level.Info(logger).Log("DBG", "exists() returned error", "err", err)
 					return err
 				}
 
+				if strings.Contains(parsedData.Name, "/") {
+					ls := func(path string) (string, error) {
+						var list []string
+						if err := bucket.Iter(ctx, path, func(s string) error {
+							list = append(list, s)
+							return nil
+						}); err != nil {
+							return "", err
+						}
+						return strings.Join(list, ", "), nil
+					}
+
+					block := strings.Split(parsedData.Name, "/")[0]
+					files, err := ls(block)
+					if err != nil {
+						level.Info(logger).Log("DBG", "ls error", block, err)
+					} else {
+						level.Info(logger).Log("DBG", "ls", block, files)
+					}
+				} else {
+					level.Info(logger).Log("DBG", "name does not include /")
+				}
+
+				if exists && strings.HasSuffix(parsedData.Name, "json") {
+					get := func(name string) (string, error) {
+						rc, err := bucket.Get(ctx, parsedData.Name)
+						if err != nil {
+							return "", err
+						}
+						defer rc.Close()
+
+						b, err := io.ReadAll(rc)
+						if err != nil {
+							return "", err
+						}
+						return string(b), nil
+					}
+
+					content, err := get(parsedData.Name)
+					if err != nil {
+						level.Info(logger).Log("DBG", "read error", "err", err)
+					} else {
+						level.Info(logger).Log("DBG", "read", "conent", content)
+					}
+				} else if !exists {
+					level.Info(logger).Log("DBG", "does not exists", "name", parsedData.Name)
+				} else{
+					level.Info(logger).Log("DBG", "not json")
+				}
+
 				if exists {
+					level.Info(logger).Log("DBG", "updating cache (exists)",
+					    "name", parsedData.Name,
+						"expire", time.Now().Add(existsCfg.ExistsTTL),
+						"ttl", existsCfg.ExistsTTL,
+					)
 					return dest.UnmarshalBinary([]byte(strconv.FormatBool(exists)), time.Now().Add(existsCfg.ExistsTTL))
 				} else {
+					level.Info(logger).Log("DBG", "updating cache (doesnt exist)",
+					    "name", parsedData.Name,
+						"expire", time.Now().Add(existsCfg.DoesntExistTTL),
+						"ttl", existsCfg.DoesntExistTTL,
+					)
 					return dest.UnmarshalBinary([]byte(strconv.FormatBool(exists)), time.Now().Add(existsCfg.DoesntExistTTL))
 				}
 

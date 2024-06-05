@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"strings"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -144,6 +145,7 @@ func (cb *CachingBucket) Iter(ctx context.Context, dir string, f func(string) er
 	if data[key] != nil {
 		list, err := cfg.Codec.Decode(data[key])
 		if err == nil {
+			level.Info(cb.logger).Log("DBG", "iter", "key", key, "list", strings.Join(list, ", "))
 			cb.operationHits.WithLabelValues(objstore.OpIter, cfgName).Inc()
 			for _, n := range list {
 				if err := f(n); err != nil {
@@ -182,11 +184,13 @@ func (cb *CachingBucket) Exists(ctx context.Context, name string) (bool, error) 
 		return cb.Bucket.Exists(ctx, name)
 	}
 
+
 	cb.operationRequests.WithLabelValues(objstore.OpExists, cfgName).Inc()
 
 	existsVerb := cachekey.BucketCacheKey{Verb: cachekey.ExistsVerb, Name: name}
 	key := existsVerb.String()
 	hits := cfg.Cache.Fetch(ctx, []string{key})
+	level.Info(cb.logger).Log("DBG", "exists", "key", key, "value", string(hits[key]))
 
 	if ex := hits[key]; ex != nil {
 		exists, err := strconv.ParseBool(string(ex))
@@ -233,6 +237,10 @@ func (cb *CachingBucket) Get(ctx context.Context, name string) (io.ReadCloser, e
 	existsKey := existsVerb.String()
 
 	hits := cfg.Cache.Fetch(ctx, []string{contentKey, existsKey})
+	level.Info(cb.logger).Log("DBG", "get", "key", contentKey + "+" + existsKey,
+		"exists", string(hits[existsKey]),
+		"content", string(hits[contentKey]),
+	)
 	if hits[contentKey] != nil {
 		cb.operationHits.WithLabelValues(objstore.OpGet, cfgName).Inc()
 		return objstore.NopCloserWithSize(bytes.NewBuffer(hits[contentKey])), nil
@@ -377,6 +385,7 @@ func (cb *CachingBucket) cachedGetRange(ctx context.Context, name string, offset
 
 	// Try to get all subranges from the cache.
 	totalCachedBytes := int64(0)
+	level.Info(cb.logger).Log("DBG", "getrange", "key", keys)
 	hits := cfg.Cache.Fetch(ctx, keys)
 	for _, b := range hits {
 		totalCachedBytes += int64(len(b))

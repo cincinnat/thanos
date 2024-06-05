@@ -307,6 +307,7 @@ func runStore(
 	if err != nil {
 		return err
 	}
+	level.Info(logger).Log("DBG", "creating bucket", "confing", confContentYaml)
 
 	bkt, err := client.NewBucket(logger, confContentYaml, conf.component.String())
 	if err != nil {
